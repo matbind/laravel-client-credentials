@@ -1,0 +1,57 @@
+{
+    "name": "amfortas/laravel-client-credentials",
+    "description": "The OAuth 2.0 client-credentials grant for Laravel, issuing short-lived Sanctum tokens with per-client abilities.",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Mathias"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "illuminate/console": "^11.0 || ^12.0",
+        "illuminate/database": "^11.0 || ^12.0",
+        "illuminate/http": "^11.0 || ^12.0",
+        "illuminate/support": "^11.0 || ^12.0",
+        "laravel/sanctum": "^4.0"
+    },
+    "require-dev": {
+        "larastan/larastan": "^3.0",
+        "laravel/pint": "^1.18",
+        "orchestra/testbench": "^9.0 || ^10.0",
+        "phpunit/phpunit": "^11.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "Amfortas\\ClientCredentials\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Amfortas\\ClientCredentials\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Amfortas\\ClientCredentials\\ClientCredentialsServiceProvider"
+            ]
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "analyse": "phpstan analyse --memory-limit=1G",
+        "lint": "pint --test",
+        "check": [
+            "@lint",
+            "@analyse",
+            "@test"
+        ]
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

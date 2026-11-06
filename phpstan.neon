@@ -1,0 +1,13 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    paths:
+        - src/
+        - config/
+        - database/
+        - tests/
+    level: max
+    databaseMigrationsPath:
+        - database/migrations
+        - vendor/laravel/sanctum/database/migrations
