@@ -19,6 +19,8 @@ use InvalidArgumentException;
 use Laravel\Sanctum\Contracts\HasApiTokens as HoldsTokens;
 use Laravel\Sanctum\HasApiTokens;
 use Laravel\Sanctum\NewAccessToken;
+use Laravel\Sanctum\PersonalAccessToken;
+use Laravel\Sanctum\Sanctum;
 use LogicException;
 use SensitiveParameter;
 
@@ -61,6 +63,9 @@ class OauthClient extends Model implements Authenticatable, HoldsTokens
      * unknown id takes as long to refuse as a wrong secret.
      */
     private const DUMMY_HASH_KEY = 'client-credentials:dummy-hash';
+
+    /** How long a token this server issues lives. */
+    public const TOKEN_LIFETIME_SECONDS = 3600;
 
     protected $table = 'oauth_clients';
 
@@ -189,6 +194,63 @@ class OauthClient extends Model implements Authenticatable, HoldsTokens
         }
 
         return $client;
+    }
+
+    /**
+     * The abilities a presented bearer token holds, when it is a live
+     * token this server issued to a client that may still get tokens; null
+     * for any other token, or none, or when none of its abilities is left.
+     * A client's token is known by its exact name, its holder and its
+     * life, which is no longer than the server gives. Only abilities the
+     * client is still allowed count, so narrowing a client takes effect
+     * at once and no token carries more than its client row. An app whose own
+     * routes take these tokens without `auth:sanctum` asks here, so it
+     * needs to know nothing of how a client marks its tokens.
+     *
+     * @return list<string>|null
+     */
+    public static function abilitiesOfToken(#[SensitiveParameter] string $presented): ?array
+    {
+        $token = $presented === '' ? null : Sanctum::personalAccessTokenModel()::findToken($presented);
+        if (! $token instanceof PersonalAccessToken || ! str_starts_with($token->name, 'oauth:')) {
+            return null;
+        }
+        $client = self::query()->where('client_id', substr($token->name, strlen('oauth:')))->first();
+        if ($client === null || $token->name !== $client->tokenName() || $client->isRevoked() || $client->hasLostItsOwner()) {
+            return null;
+        }
+        if (! self::isLiveIssuedToken($token)) {
+            return null;
+        }
+        $holder = $client->tokenHolder();
+        $tokenable = $token->tokenable;
+        if (! $holder instanceof Model || ! $tokenable instanceof Model || ! $tokenable->is($holder)) {
+            return null;
+        }
+
+        $abilities = array_values(array_intersect(array_filter($token->abilities ?? [], 'is_string'), $client->allowed_abilities));
+
+        return $abilities === [] ? null : $abilities;
+    }
+
+    /**
+     * Whether the token is still within the life this server gives a token,
+     * and within Sanctum's own `sanctum.expiration` when the app sets one;
+     * a token made by hand to last longer is not one this server issued.
+     */
+    private static function isLiveIssuedToken(PersonalAccessToken $token): bool
+    {
+        $created = $token->created_at;
+        $expires = $token->expires_at;
+        if ($created === null || $expires === null || ! $expires->isFuture()) {
+            return false;
+        }
+        if ($expires->getTimestamp() - $created->getTimestamp() > self::TOKEN_LIFETIME_SECONDS) {
+            return false;
+        }
+        $minutes = config('sanctum.expiration');
+
+        return ! is_numeric($minutes) || $created->copy()->addMinutes((int) $minutes)->isFuture();
     }
 
     /**

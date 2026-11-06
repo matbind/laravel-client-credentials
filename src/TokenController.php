@@ -6,13 +6,16 @@ namespace Amfortas\ClientCredentials;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Route as RouteDefinition;
+use Illuminate\Support\Facades\Route;
 
 /**
  * The token endpoint, the HTTP side of [ClientCredentialsGrant]: reads
  * the grant type and client credentials the way RFC 6749 allows them to
- * arrive, and shapes the answer as §5.1 says. The app chooses its path:
+ * arrive, and shapes the answer as §5.1 says. The app chooses its path,
+ * and routes it through [self::route], which puts the throttle on it:
  *
- *   Route::post('oauth/token', TokenController::class);
+ *   TokenController::route('oauth/token');
  *
  * Credentials come either in the form body or as HTTP Basic (§2.3.1),
  * never both and never in the query string, where they would land in
@@ -20,6 +23,22 @@ use Illuminate\Http\Request;
  */
 final class TokenController
 {
+    /**
+     * The rate limiter on the endpoint: requests per minute from one
+     * address. Each request costs a password hash, known client id or not.
+     */
+    public const LIMITER = 'client-credentials';
+
+    public const REQUESTS_PER_MINUTE = 60;
+
+    /**
+     * Route the endpoint at this path, behind the limiter.
+     */
+    public static function route(string $uri): RouteDefinition
+    {
+        return Route::post($uri, self::class)->middleware('throttle:'.self::LIMITER);
+    }
+
     public function __invoke(Request $request, ClientCredentialsGrant $grant): JsonResponse
     {
         $grantType = $this->bodyString($request, 'grant_type');
@@ -32,7 +51,7 @@ final class TokenController
         }
 
         [$clientId, $secret] = $this->credentials($request);
-        $issued = $grant->issue($clientId, $secret, $scope, (string) $request->ip());
+        $issued = $grant->issue($clientId, $secret, $scope);
 
         return new JsonResponse([
             'access_token' => $issued->accessToken,

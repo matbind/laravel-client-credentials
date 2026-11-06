@@ -44,17 +44,6 @@ final class OAuthError extends RuntimeException
         ]);
     }
 
-    /**
-     * Not one of §5.2's cases; 429 so a client backs off and retries
-     * rather than treating it as a wrong secret.
-     */
-    public static function tooManyFailures(int $retryAfterSeconds): self
-    {
-        return new self('invalid_client', 'too many failed attempts; retry later', 429, [
-            'Retry-After' => (string) $retryAfterSeconds,
-        ]);
-    }
-
     public static function invalidScope(): self
     {
         return new self('invalid_scope', 'scope exceeds what this client is allowed', 400);

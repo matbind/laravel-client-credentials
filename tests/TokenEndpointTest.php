@@ -6,6 +6,7 @@ namespace Amfortas\ClientCredentials\Tests;
 
 use Amfortas\ClientCredentials\OauthClient;
 use Amfortas\ClientCredentials\Tests\Fixtures\Operator;
+use Illuminate\Contracts\Config\Repository;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Testing\TestResponse;
@@ -129,6 +130,122 @@ final class TokenEndpointTest extends TestCase
             ]);
             $this->assertOAuthError($response, 400, 'invalid_request');
         }
+    }
+
+    #[Test]
+    public function thePackagesRouteThrottlesEachAddress(): void
+    {
+        for ($i = 0; $i < 60; $i++) {
+            $this->requestToken(['client_id' => "nobody-{$i}", 'client_secret' => 'x'])->assertUnauthorized();
+        }
+
+        $this->requestToken(['client_id' => 'nobody-60', 'client_secret' => 'x'])->assertStatus(429);
+        $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.7'])
+            ->requestToken(['client_id' => 'nobody', 'client_secret' => 'x'])
+            ->assertUnauthorized();
+    }
+
+    #[Test]
+    public function aPresentedTokenGivesItsClientsAbilitiesWhileLive(): void
+    {
+        [, $secret] = OauthClient::register(null, 'broker', self::ALLOWED);
+        $token = $this->accessToken($this->requestToken(['client_secret' => $secret, 'scope' => 'reports:read']));
+
+        $this->assertSame(['reports:read'], OauthClient::abilitiesOfToken($token));
+
+        $this->travel(61)->minutes();
+        $this->assertNull(OauthClient::abilitiesOfToken($token));
+    }
+
+    #[Test]
+    public function aPresentedTokenOfAnOwnedClientGivesItsAbilities(): void
+    {
+        $operator = Operator::query()->create(['email' => 'ops@example.test']);
+        [, $secret] = OauthClient::register($operator, 'broker', self::ALLOWED);
+        $token = $this->accessToken($this->requestToken(['client_secret' => $secret, 'scope' => 'reports:write']));
+
+        $this->assertSame(['reports:write'], OauthClient::abilitiesOfToken($token));
+
+        $operator->delete();
+        $this->assertNull(OauthClient::abilitiesOfToken($token));
+    }
+
+    #[Test]
+    public function aPresentedTokenNoClientIssuedGivesNothing(): void
+    {
+        $operator = Operator::query()->create(['email' => 'ops@example.test']);
+        $handMade = $operator->createToken('hand-made', ['*'])->plainTextToken;
+        // Named like a client's, but no client issued it.
+        $impostor = $operator->createToken('oauth:broker', ['*'])->plainTextToken;
+        [$client] = OauthClient::register(null, 'broker', self::ALLOWED);
+
+        $this->assertNull(OauthClient::abilitiesOfToken($handMade));
+        $this->assertNull(OauthClient::abilitiesOfToken($impostor));
+        $this->assertNull(OauthClient::abilitiesOfToken('not-a-token'));
+        $this->assertNull(OauthClient::abilitiesOfToken(''));
+        $client->revoke();
+    }
+
+    #[Test]
+    public function aPresentedTokenHoldsOnlyWhatItsClientIsStillAllowed(): void
+    {
+        [$client, $secret] = OauthClient::register(null, 'broker', self::ALLOWED);
+        $token = $this->accessToken($this->requestToken(['client_secret' => $secret]));
+        $client->allowed_abilities = ['reports:read'];
+        $client->save();
+        $madeInCode = $client->createToken('oauth:broker', ['*'], now()->addHour())->plainTextToken;
+
+        $this->assertSame(['reports:read'], OauthClient::abilitiesOfToken($token));
+        $this->assertNull(OauthClient::abilitiesOfToken($madeInCode));
+
+        // Narrowed to an ability the token never held: nothing is left.
+        $client->allowed_abilities = ['reports:archive'];
+        $client->save();
+        $this->assertNull(OauthClient::abilitiesOfToken($token));
+    }
+
+    #[Test]
+    public function aPresentedTokenThatOutlivesWhatTheServerIssuesGivesNothing(): void
+    {
+        // Named like the client's and held by its owner, but made by hand
+        // to last for years: not a token this server issued.
+        $operator = Operator::query()->create(['email' => 'ops@example.test']);
+        OauthClient::register($operator, 'broker', self::ALLOWED);
+        $longLived = $operator->createToken('oauth:broker', ['reports:read'], now()->addYears(5))->plainTextToken;
+
+        $this->assertNull(OauthClient::abilitiesOfToken($longLived));
+    }
+
+    #[Test]
+    public function aPresentedTokenFollowsSanctumsOwnExpiry(): void
+    {
+        [, $secret] = OauthClient::register(null, 'broker', self::ALLOWED);
+        $token = $this->accessToken($this->requestToken(['client_secret' => $secret]));
+        $this->app?->make(Repository::class)->set('sanctum.expiration', 10);
+
+        $this->travel(30)->minutes();
+
+        $this->assertNull(OauthClient::abilitiesOfToken($token));
+    }
+
+    #[Test]
+    public function aPresentedTokenMustBearItsClientsExactName(): void
+    {
+        [$client] = OauthClient::register(null, 'broker', self::ALLOWED);
+        $variant = $client->createToken('oauth:BROKER', ['reports:read'], now()->addHour())->plainTextToken;
+
+        $this->assertNull(OauthClient::abilitiesOfToken($variant));
+    }
+
+    #[Test]
+    public function aPresentedTokenOfARevokedClientGivesNothing(): void
+    {
+        [$client, $secret] = OauthClient::register(null, 'broker', self::ALLOWED);
+        $token = $this->accessToken($this->requestToken(['client_secret' => $secret]));
+
+        $client->revoke();
+
+        $this->assertNull(OauthClient::abilitiesOfToken($token));
     }
 
     #[Test]
@@ -303,35 +420,6 @@ final class TokenEndpointTest extends TestCase
             400,
             'invalid_request',
         );
-    }
-
-    #[Test]
-    public function repeatedBadSecretsAreRateLimitedPerClient(): void
-    {
-        [, $secret] = OauthClient::register(null, 'broker', self::ALLOWED);
-
-        for ($i = 0; $i < 10; $i++) {
-            $this->requestToken(['client_secret' => 'wrong'])->assertUnauthorized();
-        }
-
-        // Once limited, even the right secret waits: answering it would
-        // tell a guesser which of its tries was right.
-        $limited = $this->requestToken(['client_secret' => $secret]);
-        $limited->assertStatus(429)->assertHeader('Retry-After');
-        $this->assertSame('invalid_client', $limited->json('error'));
-
-        // Another client is not held up by this one's failures, nor is
-        // this one from another address: the limit stops guessing, and a
-        // guesser cannot lock the client out for everyone.
-        OauthClient::register(null, 'other-client', self::ALLOWED);
-        $this->requestToken(['client_id' => 'other-client', 'client_secret' => 'wrong'])->assertUnauthorized();
-        $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.7'])
-            ->requestToken(['client_secret' => $secret])
-            ->assertOk();
-        $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1']);
-
-        $this->travel(61)->seconds();
-        $this->requestToken(['client_secret' => $secret])->assertOk();
     }
 
     /**

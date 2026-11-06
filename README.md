@@ -3,7 +3,7 @@
 The OAuth 2.0 client-credentials grant ([RFC 6749 §4.4](https://datatracker.ietf.org/doc/html/rfc6749#section-4.4)) for Laravel. A machine holds a client id and secret instead of a long-lived token, and trades them for a [Sanctum](https://laravel.com/docs/sanctum) token that expires after an hour and carries only the abilities its client row allows. Sanctum's `auth:sanctum` and `abilities:` middleware then treat it like any other token.
 
 - Secrets are stored as argon2id hashes and shown once.
-- Wrong secrets are rate-limited per client id and caller address; an unknown id takes as long to refuse as a wrong secret.
+- The endpoint is rate-limited per address; an unknown id takes as long to refuse as a wrong secret, and no one can lock a client out.
 - Refusals are answered, never logged, so no secret reaches a log through a stack trace.
 - A client's abilities are written down in one place, its row. An empty `scope` asks for all of them, a non-empty one for a subset.
 - Rotating or revoking a client kills the tokens it has already minted.
@@ -18,18 +18,26 @@ php artisan vendor:publish --tag=client-credentials-migrations
 php artisan migrate
 ```
 
-Route the token endpoint wherever the app wants it, behind a throttle by address: each request costs an argon2id hash, and the package's own limit only holds per client id.
+Route the token endpoint wherever the app wants it. `TokenController::route` puts it behind the package's limiter, 60 requests a minute per address: each request costs an argon2id hash, known client id or not.
 
 ```php
 use Amfortas\ClientCredentials\TokenController;
 
-Route::post('oauth/token', TokenController::class)->middleware('throttle:60,1');
+TokenController::route('oauth/token');
 ```
+
+Behind a reverse proxy, configure Laravel's trusted proxies so `$request->ip()` is the caller and not the proxy; otherwise every caller shares one limit. An app can redefine the limiter after the package boots: `RateLimiter::for(TokenController::LIMITER, ...)`.
 
 Guard routes by ability as with any Sanctum token:
 
 ```php
 Route::middleware(['auth:sanctum', 'abilities:reports:read'])->get('reports', ...);
+```
+
+Routes that take these tokens without `auth:sanctum` ask the package what a presented token holds, and get null for anything but a live token a client was issued:
+
+```php
+$abilities = OauthClient::abilitiesOfToken($request->bearerToken() ?? '');
 ```
 
 ## Clients

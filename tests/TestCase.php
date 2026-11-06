@@ -54,7 +54,7 @@ abstract class TestCase extends Orchestra
      */
     protected function defineRoutes($router): void
     {
-        $router->post(self::TOKEN_PATH, TokenController::class);
+        TokenController::route(self::TOKEN_PATH);
         $router->middleware(['auth:sanctum', CheckAbilities::class.':reports:read'])
             ->get('/reports', fn () => 'reports');
         $router->middleware(['auth:sanctum', CheckAbilities::class.':reports:publish'])
