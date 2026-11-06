@@ -8,7 +8,7 @@ The OAuth 2.0 client-credentials grant ([RFC 6749 §4.4](https://datatracker.iet
 - A client's abilities are written down in one place, its row. An empty `scope` asks for all of them, a non-empty one for a subset.
 - Rotating or revoking a client kills the tokens it has already minted.
 
-Requires PHP 8.2, Laravel 11 or 12, and Sanctum 4.
+Requires PHP 8.2, Laravel 11.33 or later (or 12), and Sanctum 4.
 
 ## Install
 

@@ -22,6 +22,8 @@ final class ManageOauthClientTest extends TestCase
     #[Test]
     public function createsAClientAndPrintsItsSecretOnce(): void
     {
+        // Read what the command printed, which a mocked console would swallow.
+        $this->withoutMockingConsoleOutput();
         $exit = Artisan::call('oauth:client', [
             'client_id' => 'broker',
             '--no-owner' => true,
@@ -152,6 +154,8 @@ final class ManageOauthClientTest extends TestCase
         [$client, $old] = OauthClient::register(null, 'broker', ['reports:read']);
         $client->issueToken(['reports:read'], CarbonImmutable::now()->addHour());
 
+        // Read what the command printed, which a mocked console would swallow.
+        $this->withoutMockingConsoleOutput();
         $exit = Artisan::call('oauth:client', ['client_id' => 'broker', '--rotate' => true]);
         $secret = $this->secretIn(Artisan::output());
 
